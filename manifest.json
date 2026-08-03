@@ -1,0 +1,10 @@
+{
+	"id": "patch-select",
+	"name": "Patch Select",
+	"version": "0.1.0",
+	"minAppVersion": "1.5.0",
+	"description": "Sends MIDI patch-select messages based on note frontmatter.",
+	"author": "Matthew",
+	"authorUrl": "",
+	"isDesktopOnly": true
+}
