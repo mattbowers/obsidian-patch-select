@@ -1,4 +1,4 @@
-import { App, DropdownComponent, Plugin, PluginSettingTab, Setting, TFile } from "obsidian";
+import {App, DropdownComponent, Notice, Plugin, PluginSettingTab, Setting, TFile} from "obsidian";
 
 const PATCH_PATTERN = /^CP\s+(\d+)\s*-\s*(\d+)$/i;
 
@@ -80,6 +80,7 @@ export default class PatchSelectPlugin extends Plugin {
 		let parsed = patchValue ? this.parsePatchNotation(patchValue) : null;
 
 		if (patchValue && !parsed) {
+			new Notice('Invalid patch format');
 			console.warn(`[obsidian-patch-select] Invalid patch format: "${patchValue}". Expected "CP x-y". Defaulting to patch 1-1.`);
 		}
 
@@ -122,6 +123,8 @@ export default class PatchSelectPlugin extends Plugin {
 		output.send([0xb0, 0x00, 0x3f]);
 		output.send([0xb0, 0x20, lsb]);
 		output.send([0xc0, program-1]);
+
+		new Notice('Sent patch '+patch+"-"+program);
 	}
 
 	async loadSettings(): Promise<void> {

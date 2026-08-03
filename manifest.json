@@ -6,5 +6,5 @@
 	"description": "Sends MIDI patch-select messages based on note frontmatter.",
 	"author": "Matthew",
 	"authorUrl": "",
-	"isDesktopOnly": true
+	"isDesktopOnly": false
 }
