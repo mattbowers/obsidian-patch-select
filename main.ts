@@ -1,13 +1,22 @@
-import { App, Plugin, TFile } from "obsidian";
+import { App, DropdownComponent, Plugin, PluginSettingTab, Setting, TFile } from "obsidian";
 
 const PATCH_PATTERN = /^CP\s+(\d+)\s*-\s*(\d+)$/i;
 
+interface PatchSelectSettings {
+	midiOutputDeviceId: string;
+}
+
+const DEFAULT_SETTINGS: PatchSelectSettings = {
+	midiOutputDeviceId: ""
+};
+
 export default class PatchSelectPlugin extends Plugin {
+	settings: PatchSelectSettings;
 	private midiAccess: MIDIAccess | null = null;
-	private midiAvailable = false;
 
 	async onload(): Promise<void> {
-		await this.initializeMidi();
+		await this.loadSettings();
+		this.addSettingTab(new PatchSelectSettingTab(this.app, this));
 
 		this.registerEvent(this.app.workspace.on("file-open", (file) => {
 			void this.handleFileOpen(file);
@@ -19,19 +28,47 @@ export default class PatchSelectPlugin extends Plugin {
 		}
 	}
 
-	private async initializeMidi(): Promise<void> {
+	private async requestMidiAccess(): Promise<MIDIAccess | null> {
+		if (this.midiAccess) {
+			return this.midiAccess;
+		}
+
 		if (!("requestMIDIAccess" in navigator)) {
-			this.midiAvailable = false;
-			return;
+			console.error("[obsidian-patch-select] Web MIDI API is not supported.");
+			return null;
 		}
 
 		try {
 			this.midiAccess = await navigator.requestMIDIAccess();
-			this.midiAvailable = true;
+			return this.midiAccess;
 		} catch (error) {
-			this.midiAvailable = false;
 			console.error("[obsidian-patch-select] Could not access MIDI outputs.", error);
+			return null;
 		}
+	}
+
+	private getMidiOutputs(access: MIDIAccess): MIDIOutput[] {
+		return Array.from(access.outputs as unknown as Iterable<[string, MIDIOutput]>, ([, output]) => output);
+	}
+
+	async getAvailableMidiOutputs(): Promise<MIDIOutput[]> {
+		const access = await this.requestMidiAccess();
+		return access ? this.getMidiOutputs(access) : [];
+	}
+
+	private async getSelectedMidiOutput(): Promise<MIDIOutput | null> {
+		const outputs = await this.getAvailableMidiOutputs();
+		if (outputs.length === 0) {
+			return null;
+		}
+
+		const selectedOutput = outputs.find((output) => output.id === this.settings.midiOutputDeviceId) ?? outputs[0];
+		if (this.settings.midiOutputDeviceId !== selectedOutput.id) {
+			this.settings.midiOutputDeviceId = selectedOutput.id;
+			await this.saveSettings();
+		}
+
+		return selectedOutput;
 	}
 
 	private async handleFileOpen(file: TFile | null): Promise<void> {
@@ -40,17 +77,15 @@ export default class PatchSelectPlugin extends Plugin {
 		}
 
 		const patchValue = this.getPatchFrontmatter(this.app, file);
-		if (!patchValue) {
-			return;
+		let parsed = patchValue ? this.parsePatchNotation(patchValue) : null;
+
+		if (patchValue && !parsed) {
+			console.warn(`[obsidian-patch-select] Invalid patch format: "${patchValue}". Expected "CP x-y". Defaulting to patch 1-1.`);
 		}
 
-		const parsed = this.parsePatchNotation(patchValue);
-		if (!parsed) {
-			console.warn(`[obsidian-patch-select] Invalid patch format: "${patchValue}". Expected "CP x-y".`);
-			return;
-		}
-
-		await this.sendPatch(parsed.patch, parsed.program);
+		const patch = parsed?.patch ?? 1;
+		const program = parsed?.program ?? 1;
+		await this.sendPatch(patch, program);
 	}
 
 	private getPatchFrontmatter(app: App, file: TFile): string | null {
@@ -78,18 +113,84 @@ export default class PatchSelectPlugin extends Plugin {
 	}
 
 	private async sendPatch(patch: number, program: number): Promise<void> {
-		if (!this.midiAvailable || !this.midiAccess) {
-			await this.initializeMidi();
-		}
-		if (!this.midiAvailable || !this.midiAccess) {
+		const output = await this.getSelectedMidiOutput();
+		if (!output) {
 			return;
 		}
 
 		const lsb = patch - 1;
-		for (const output of this.midiAccess.outputs.values()) {
-			output.send([0xb0, 0x00, 0x3f]);
-			output.send([0xb0, 0x20, lsb]);
-			output.send([0xc0, program]);
+		output.send([0xb0, 0x00, 0x3f]);
+		output.send([0xb0, 0x20, lsb]);
+		output.send([0xc0, program-1]);
+	}
+
+	async loadSettings(): Promise<void> {
+		const loadedSettings = await this.loadData();
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, loadedSettings);
+	}
+
+	async saveSettings(): Promise<void> {
+		await this.saveData(this.settings);
+	}
+}
+
+class PatchSelectSettingTab extends PluginSettingTab {
+	plugin: PatchSelectPlugin;
+
+	constructor(app: App, plugin: PatchSelectPlugin) {
+		super(app, plugin);
+		this.plugin = plugin;
+	}
+
+	display(): void {
+		const { containerEl } = this;
+		containerEl.empty();
+
+		new Setting(containerEl)
+			.setName("MIDI output device")
+			.setDesc("Select which MIDI output device receives patch-select messages")
+			.addDropdown((dropdown) => {
+				void this.populateOutputDeviceDropdown(dropdown);
+			});
+	}
+
+	private async populateOutputDeviceDropdown(dropdown: DropdownComponent): Promise<void> {
+		try {
+			const outputs = await this.plugin.getAvailableMidiOutputs();
+			if (outputs.length === 0) {
+				dropdown.addOption("", "No MIDI outputs available");
+				dropdown.setDisabled(true);
+				dropdown.setValue("");
+				return;
+			}
+
+			for (const output of outputs) {
+				dropdown.addOption(output.id, output.name || "Unknown Device");
+			}
+
+			const resolvedValue = outputs.some((output) => output.id === this.plugin.settings.midiOutputDeviceId)
+				? this.plugin.settings.midiOutputDeviceId
+				: outputs[0].id;
+
+			if (this.plugin.settings.midiOutputDeviceId !== resolvedValue) {
+				this.plugin.settings.midiOutputDeviceId = resolvedValue;
+				await this.plugin.saveSettings();
+			}
+
+			dropdown.setValue(resolvedValue);
+			dropdown.onChange((value) => {
+				void this.handleOutputSelection(value);
+			});
+		} catch (error) {
+			console.error("[obsidian-patch-select] Failed to enumerate MIDI outputs.", error);
+			dropdown.addOption("", "No MIDI outputs available");
+			dropdown.setDisabled(true);
+			dropdown.setValue("");
 		}
+	}
+
+	private async handleOutputSelection(value: string): Promise<void> {
+		this.plugin.settings.midiOutputDeviceId = value;
+		await this.plugin.saveSettings();
 	}
 }
