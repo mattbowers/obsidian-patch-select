@@ -1,4 +1,13 @@
-import {App, DropdownComponent, Notice, Plugin, PluginSettingTab, Setting, TFile} from "obsidian";
+import {
+	App,
+	DropdownComponent,
+	MarkdownPostProcessorContext,
+	Notice,
+	Plugin,
+	PluginSettingTab,
+	Setting,
+	TFile
+} from "obsidian";
 
 const PATCH_PATTERN = /^CP\s+(\d+)\s*-\s*(\d+)$/i;
 
@@ -17,15 +26,17 @@ export default class PatchSelectPlugin extends Plugin {
 	async onload(): Promise<void> {
 		await this.loadSettings();
 		this.addSettingTab(new PatchSelectSettingTab(this.app, this));
+		this.addCommand({
+			id: "send-patch-for-active-note",
+			name: "Send patch for active note",
+			callback: () => {
+				void this.handleActiveNote();
+			}
+		});
 
-		this.registerEvent(this.app.workspace.on("file-open", (file) => {
-			void this.handleFileOpen(file);
-		}));
-
-		const activeFile = this.app.workspace.getActiveFile();
-		if (activeFile) {
-			void this.handleFileOpen(activeFile);
-		}
+		this.registerMarkdownPostProcessor((el, ctx) => {
+			void this.addPatchButton(el, ctx);
+		});
 	}
 
 	private async requestMidiAccess(): Promise<MIDIAccess | null> {
@@ -71,22 +82,71 @@ export default class PatchSelectPlugin extends Plugin {
 		return selectedOutput;
 	}
 
-	private async handleFileOpen(file: TFile | null): Promise<void> {
+	private async handleActiveNote(): Promise<void> {
+		const file = this.app.workspace.getActiveFile();
+		await this.handleFile(file);
+	}
+
+	private async handleSourcePath(sourcePath: string | null | undefined): Promise<void> {
+		if (!sourcePath) {
+			new Notice("Patch Select: Could not resolve embedded note.");
+			return;
+		}
+
+		const abstractFile = this.app.vault.getAbstractFileByPath(sourcePath);
+		if (!(abstractFile instanceof TFile)) {
+			new Notice("Patch Select: Could not resolve embedded note.");
+			return;
+		}
+
+		await this.handleFile(abstractFile);
+	}
+
+	private async handleFile(file: TFile | null): Promise<void> {
 		if (!file || file.extension !== "md") {
 			return;
 		}
 
 		const patchValue = this.getPatchFrontmatter(this.app, file);
+		await this.sendPatchFromValue(patchValue);
+	}
+
+	private async sendPatchFromValue(patchValue: string | null): Promise<void> {
 		let parsed = patchValue ? this.parsePatchNotation(patchValue) : null;
 
 		if (patchValue && !parsed) {
-			new Notice('Invalid patch format');
+			new Notice("Invalid patch format");
 			console.warn(`[obsidian-patch-select] Invalid patch format: "${patchValue}". Expected "CP x-y". Defaulting to patch 1-1.`);
 		}
 
 		const patch = parsed?.patch ?? 1;
 		const program = parsed?.program ?? 1;
 		await this.sendPatch(patch, program);
+	}
+
+	private async addPatchButton(el: HTMLElement, ctx: MarkdownPostProcessorContext): Promise<void> {
+		const file = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
+		if (!(file instanceof TFile) || file.extension !== "md") {
+			return;
+		}
+
+		const patchValue = this.getPatchFrontmatter(this.app, file);
+		if (!patchValue || !this.parsePatchNotation(patchValue)) {
+			return;
+		}
+
+		const host = el.querySelector<HTMLElement>(".chord-sheet-properties");
+		if (!host || host.dataset.patchSelectButton === "true") {
+			return;
+		}
+
+		host.dataset.patchSelectButton = "true";
+		host.style.cursor = "pointer";
+		host.title = "Send patch";
+
+		this.registerDomEvent(host, "click", () => {
+			void this.handleSourcePath(ctx.sourcePath);
+		});
 	}
 
 	private getPatchFrontmatter(app: App, file: TFile): string | null {

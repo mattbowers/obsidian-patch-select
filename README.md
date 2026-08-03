@@ -1,6 +1,6 @@
 # Patch Select (Obsidian plugin)
 
-This plugin sends MIDI bank/program change messages whenever a note is opened and the note has a `patch` frontmatter key.
+This plugin sends MIDI bank/program change messages whenever a note is opened and the note has a `patch` frontmatter key. It also adds a small **Send patch** button to rendered notes, which works for embedded notes that are not the active file.
 
 ## Development
 
@@ -16,6 +16,10 @@ or pass it as an argument: `npm run install:local -- /path/to/vault/.obsidian/pl
 ## Settings
 
 Choose the target output in **Settings → Patch Select → MIDI output device**.
+
+## Manual sending
+
+Use the **Patch Select: Send patch for active note** command or the inline **Send patch** button in a rendered note when you want to trigger the patch manually.
 
 ## Frontmatter format
 

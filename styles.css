@@ -1,0 +1,3 @@
+.chord-sheet-properties[data-patch-select-button="true"] {
+	color: var(--text-accent);
+}
