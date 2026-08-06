@@ -13,10 +13,12 @@ const PATCH_PATTERN = /^CP\s+(\d+)\s*-\s*(\d+)$/i;
 
 interface PatchSelectSettings {
 	midiOutputDeviceId: string;
+	secondaryMidiOutputDeviceId: string;
 }
 
 const DEFAULT_SETTINGS: PatchSelectSettings = {
-	midiOutputDeviceId: ""
+	midiOutputDeviceId: "",
+	secondaryMidiOutputDeviceId: ""
 };
 
 export default class PatchSelectPlugin extends Plugin {
@@ -67,19 +69,40 @@ export default class PatchSelectPlugin extends Plugin {
 		return access ? this.getMidiOutputs(access) : [];
 	}
 
-	private async getSelectedMidiOutput(): Promise<MIDIOutput | null> {
+	private async getSelectedMidiOutputs(): Promise<MIDIOutput[]> {
 		const outputs = await this.getAvailableMidiOutputs();
 		if (outputs.length === 0) {
-			return null;
+			return [];
 		}
 
-		const selectedOutput = outputs.find((output) => output.id === this.settings.midiOutputDeviceId) ?? outputs[0];
-		if (this.settings.midiOutputDeviceId !== selectedOutput.id) {
-			this.settings.midiOutputDeviceId = selectedOutput.id;
+		const selectedOutputs: MIDIOutput[] = [];
+		let didChange = false;
+
+		const primaryOutput = outputs.find((output) => output.id === this.settings.midiOutputDeviceId) ?? outputs[0];
+		selectedOutputs.push(primaryOutput);
+
+		if (this.settings.midiOutputDeviceId !== primaryOutput.id) {
+			this.settings.midiOutputDeviceId = primaryOutput.id;
+			didChange = true;
+		}
+
+		if (this.settings.secondaryMidiOutputDeviceId) {
+			const secondaryOutput = outputs.find((output) => output.id === this.settings.secondaryMidiOutputDeviceId);
+			if (secondaryOutput) {
+				if (secondaryOutput.id !== primaryOutput.id) {
+					selectedOutputs.push(secondaryOutput);
+				}
+			} else {
+				this.settings.secondaryMidiOutputDeviceId = "";
+				didChange = true;
+			}
+		}
+
+		if (didChange) {
 			await this.saveSettings();
 		}
 
-		return selectedOutput;
+		return selectedOutputs;
 	}
 
 	private async handleActiveNote(): Promise<void> {
@@ -174,17 +197,19 @@ export default class PatchSelectPlugin extends Plugin {
 	}
 
 	private async sendPatch(patch: number, program: number): Promise<void> {
-		const output = await this.getSelectedMidiOutput();
-		if (!output) {
+		const outputs = await this.getSelectedMidiOutputs();
+		if (outputs.length === 0) {
 			return;
 		}
 
 		const lsb = patch - 1;
-		output.send([0xb0, 0x00, 0x3f]);
-		output.send([0xb0, 0x20, lsb]);
-		output.send([0xc0, program-1]);
+		for (const output of outputs) {
+			output.send([0xb0, 0x00, 0x3f]);
+			output.send([0xb0, 0x20, lsb]);
+			output.send([0xc0, program - 1]);
+		}
 
-		new Notice('Sent patch '+patch+"-"+program);
+		new Notice("Sent patch " + patch + "-" + program);
 	}
 
 	async loadSettings(): Promise<void> {
@@ -213,11 +238,18 @@ class PatchSelectSettingTab extends PluginSettingTab {
 			.setName("MIDI output device")
 			.setDesc("Select which MIDI output device receives patch-select messages")
 			.addDropdown((dropdown) => {
-				void this.populateOutputDeviceDropdown(dropdown);
+				void this.populatePrimaryOutputDeviceDropdown(dropdown);
+			});
+
+		new Setting(containerEl)
+			.setName("Secondary MIDI output device")
+			.setDesc("Optionally send patch-select messages to a second MIDI output device")
+			.addDropdown((dropdown) => {
+				void this.populateSecondaryOutputDeviceDropdown(dropdown);
 			});
 	}
 
-	private async populateOutputDeviceDropdown(dropdown: DropdownComponent): Promise<void> {
+	private async populatePrimaryOutputDeviceDropdown(dropdown: DropdownComponent): Promise<void> {
 		try {
 			const outputs = await this.plugin.getAvailableMidiOutputs();
 			if (outputs.length === 0) {
@@ -242,7 +274,7 @@ class PatchSelectSettingTab extends PluginSettingTab {
 
 			dropdown.setValue(resolvedValue);
 			dropdown.onChange((value) => {
-				void this.handleOutputSelection(value);
+				void this.handlePrimaryOutputSelection(value);
 			});
 		} catch (error) {
 			console.error("[obsidian-patch-select] Failed to enumerate MIDI outputs.", error);
@@ -252,8 +284,49 @@ class PatchSelectSettingTab extends PluginSettingTab {
 		}
 	}
 
-	private async handleOutputSelection(value: string): Promise<void> {
+	private async populateSecondaryOutputDeviceDropdown(dropdown: DropdownComponent): Promise<void> {
+		try {
+			const outputs = await this.plugin.getAvailableMidiOutputs();
+			dropdown.addOption("", "None");
+
+			if (outputs.length === 0) {
+				dropdown.setDisabled(true);
+				dropdown.setValue("");
+				return;
+			}
+
+			for (const output of outputs) {
+				dropdown.addOption(output.id, output.name || "Unknown Device");
+			}
+
+			const resolvedValue = this.plugin.settings.secondaryMidiOutputDeviceId && outputs.some((output) => output.id === this.plugin.settings.secondaryMidiOutputDeviceId)
+				? this.plugin.settings.secondaryMidiOutputDeviceId
+				: "";
+
+			if (this.plugin.settings.secondaryMidiOutputDeviceId !== resolvedValue) {
+				this.plugin.settings.secondaryMidiOutputDeviceId = resolvedValue;
+				await this.plugin.saveSettings();
+			}
+
+			dropdown.setValue(resolvedValue);
+			dropdown.onChange((value) => {
+				void this.handleSecondaryOutputSelection(value);
+			});
+		} catch (error) {
+			console.error("[obsidian-patch-select] Failed to enumerate MIDI outputs.", error);
+			dropdown.addOption("", "No MIDI outputs available");
+			dropdown.setDisabled(true);
+			dropdown.setValue("");
+		}
+	}
+
+	private async handlePrimaryOutputSelection(value: string): Promise<void> {
 		this.plugin.settings.midiOutputDeviceId = value;
+		await this.plugin.saveSettings();
+	}
+
+	private async handleSecondaryOutputSelection(value: string): Promise<void> {
+		this.plugin.settings.secondaryMidiOutputDeviceId = value;
 		await this.plugin.saveSettings();
 	}
 }
