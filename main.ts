@@ -138,7 +138,6 @@ export default class PatchSelectPlugin extends Plugin {
 		let parsed = patchValue ? this.parsePatchNotation(patchValue) : null;
 
 		if (patchValue && !parsed) {
-			new Notice("Invalid patch format");
 			console.warn(`[obsidian-patch-select] Invalid patch format: "${patchValue}". Expected "CP x-y". Defaulting to patch 1-1.`);
 		}
 
@@ -150,11 +149,6 @@ export default class PatchSelectPlugin extends Plugin {
 	private async addPatchButton(el: HTMLElement, ctx: MarkdownPostProcessorContext): Promise<void> {
 		const file = this.app.vault.getAbstractFileByPath(ctx.sourcePath);
 		if (!(file instanceof TFile) || file.extension !== "md") {
-			return;
-		}
-
-		const patchValue = this.getPatchFrontmatter(this.app, file);
-		if (!patchValue || !this.parsePatchNotation(patchValue)) {
 			return;
 		}
 

@@ -38,4 +38,4 @@ For `CP x-y`, the plugin sends:
 2. CC 32 = x-1 (LSB bank select)
 3. Program Change = y
 
-If `patch` is missing, nothing is sent.
+If `patch` is missing or invalid, the plugin sends `CP 1-1`.
