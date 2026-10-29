@@ -1,3 +1,9 @@
 .chord-sheet-properties[data-patch-select-button="true"] {
 	color: var(--text-accent);
 }
+/* obsidian-set-list-plugin's Stage view layers a gesture overlay (z-index 1) over the
+   rendered song that swallows every pointer event, so lift the button above it. */
+.set-list-stage-view .chord-sheet-properties[data-patch-select-button="true"] {
+	position: relative;
+	z-index: 2;
+}
